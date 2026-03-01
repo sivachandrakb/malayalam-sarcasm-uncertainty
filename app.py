@@ -6,26 +6,30 @@ from utils import mc_dropout_predict
 
 st.set_page_config(page_title="Malayalam Sarcasm Detector", layout="centered")
 
-# -----------------------------
-# Load Model
-# -----------------------------
+import streamlit as st
+import torch
+from transformers import AutoTokenizer
+from model import EvidentialDeBERTa
+
 @st.cache_resource
 def load_model():
     MODEL_NAME = "microsoft/deberta-v3-base"
+    HF_MODEL = "sivachandrakb/malayalam-sarcasm-deberta"
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     model = EvidentialDeBERTa(MODEL_NAME)
 
-    model.load_state_dict(
-        torch.load("best_model.pt", map_location="cpu")
+    # Download large model from HuggingFace
+    state_dict = torch.hub.load_state_dict_from_url(
+        f"https://huggingface.co/{HF_MODEL}/resolve/main/best_model.pt",
+        map_location="cpu"
     )
 
+    model.load_state_dict(state_dict)
     model.eval()
 
     return tokenizer, model
-
-tokenizer, model = load_model()
 
 # -----------------------------
 # UI
