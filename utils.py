@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 def mc_dropout_predict(model, input_ids, attention_mask, T=20):
-    model.train()  # Enable dropout
+    model.train()  # Enable dropout during inference
 
     probs_list = []
 
