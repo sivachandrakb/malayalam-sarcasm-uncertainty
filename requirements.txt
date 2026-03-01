@@ -1,4 +1,8 @@
 streamlit
-torch
-transformers
+torch==2.1.2
+transformers==4.36.2
 numpy
+pandas
+scikit-learn
+tiktoken
+sentencepiece
