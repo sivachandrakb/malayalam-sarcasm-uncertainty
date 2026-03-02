@@ -1,154 +1,123 @@
-# import streamlit as st
-# import torch
-# from transformers import AutoTokenizer
-# from model import EvidentialDeBERTa
-# from utils import mc_dropout_predict
-
-# st.set_page_config(page_title="Malayalam Sarcasm Detector", layout="centered")
-
-# import streamlit as st
-# import torch
-# from transformers import AutoTokenizer
-# from model import EvidentialDeBERTa
-
-# @st.cache_resource
-# def load_model():
-#     MODEL_NAME = "microsoft/deberta-v3-base"
-#     HF_MODEL = "sivachandrakb/malayalam-sarcasm-deberta"
-
-#     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-#     model = EvidentialDeBERTa(MODEL_NAME)
-
-#     # Download large model from HuggingFace
-#     state_dict = torch.hub.load_state_dict_from_url(
-#         f"https://huggingface.co/{HF_MODEL}/resolve/main/best_model.pt",
-#         map_location="cpu"
-#     )
-
-#     model.load_state_dict(state_dict)
-#     model.eval()
-
-#     return tokenizer, model
-
-# # -----------------------------
-# # UI
-# # -----------------------------
-# st.title("🧠 Malayalam Sarcasm Detection")
-# st.write("Uncertainty-Aware DeBERTa Model (EDL + MC Dropout)")
-
-# text = st.text_area("Enter Malayalam Text")
-
-# if st.button("Predict"):
-
-#     if text.strip() == "":
-#         st.warning("Please enter text.")
-#     else:
-#         inputs = tokenizer(
-#             text,
-#             return_tensors="pt",
-#             truncation=True,
-#             padding=True,
-#             max_length=128
-#         )
-
-#         with torch.no_grad():
-#             mean_probs, epi_uncertainty = mc_dropout_predict(
-#                 model,
-#                 inputs["input_ids"],
-#                 inputs["attention_mask"],
-#                 T=20
-#             )
-
-#         prediction = mean_probs.argmax()
-#         confidence = mean_probs.max()
-
-#         label = "Sarcastic" if prediction == 1 else "Non-Sarcastic"
-
-#         st.subheader("Prediction")
-#         st.write(f"### {label}")
-
-#         st.subheader("Confidence")
-#         st.write(f"{confidence:.4f}")
-
-#         st.subheader("Epistemic Uncertainty")
-#         st.write(f"{epi_uncertainty:.6f}")
-
-#         # Reliability Indicator
-#         if confidence > 0.85:
-#             st.success("High Confidence Prediction")
-#         elif confidence > 0.65:
-#             st.warning("Moderate Confidence")
-#         else:
-#             st.error("Low Confidence - Model Unsure")
-
-import streamlit as st
 import torch
-from transformers import AutoTokenizer
-from model import EvidentialDeBERTa
-from utils import mc_dropout_predict
+import numpy as np
+import gradio as gr
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-st.set_page_config(page_title="Malayalam Sarcasm Detection")
+# ============================
+# Configuration
+# ============================
 
-# -------------------------
-# Load Model
-# -------------------------
-@st.cache_resource
-def load_model():
-    MODEL_NAME = "microsoft/deberta-v3-base"
-    HF_MODEL = "sivachandrakb/malayalam-sarcasm-deberta"
+MODEL_NAME = "sivachandrakb/malayalam-sarcasm-deberta"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MAX_LENGTH = 128
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+# ============================
+# Load Model + Tokenizer
+# ============================
 
-    model = EvidentialDeBERTa(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
-    state_dict = torch.hub.load_state_dict_from_url(
-        f"https://huggingface.co/{HF_MODEL}/resolve/main/best_model.pt",
-        map_location="cpu"
-    )
+model = AutoModelForSequenceClassification.from_pretrained(
+    MODEL_NAME,
+    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+)
 
-    model.load_state_dict(state_dict)
-    model.eval()
+model.to(DEVICE)
+model.eval()
 
-    return tokenizer, model
+# ============================
+# Enable MC Dropout
+# ============================
 
-# IMPORTANT: unpack here
-tokenizer, model = load_model()
+def enable_dropout(m):
+    if isinstance(m, torch.nn.Dropout):
+        m.train()
 
-# -------------------------
-# UI
-# -------------------------
-st.title("🧠 Malayalam Sarcasm Detection")
-st.write("Uncertainty-Aware DeBERTa Model (EDL + MC Dropout)")
+# ============================
+# Prediction Function
+# ============================
 
-text = st.text_area("Enter Malayalam Text")
-
-if st.button("Predict"):
+def predict(text, T):
 
     if text.strip() == "":
-        st.warning("Please enter text.")
-    else:
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            padding=True,
-            max_length=128
-        )
+        return "Please enter text.", {}, 0.0, 0.0
 
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        padding="max_length",
+        max_length=MAX_LENGTH
+    ).to(DEVICE)
+
+    model.apply(enable_dropout)
+
+    mc_probs = []
+    alpha_last = None
+
+    for _ in range(T):
         with torch.no_grad():
-            mean_probs, epi_uncertainty = mc_dropout_predict(
-                model,
-                inputs["input_ids"],
-                inputs["attention_mask"],
-                T=20
-            )
+            outputs = model(**inputs)
 
-        prediction = mean_probs.argmax()
-        confidence = mean_probs.max()
+            logits = outputs.logits
 
-        label = "Sarcastic" if prediction == 1 else "Non-Sarcastic"
+            # Evidential assumption: Softplus for evidence
+            evidence = torch.nn.functional.softplus(logits)
+            alpha = evidence + 1
+            alpha_last = alpha
 
-        st.success(f"Prediction: {label}")
-        st.write("Confidence:", round(float(confidence), 4))
-        st.write("Epistemic Uncertainty:", round(float(epi_uncertainty), 6))
+            S = torch.sum(alpha, dim=1, keepdim=True)
+            probs = alpha / S
+
+            mc_probs.append(probs.detach().cpu().numpy())
+
+    mc_probs = np.array(mc_probs)
+    mean_probs = np.mean(mc_probs, axis=0)
+
+    # Epistemic Uncertainty (variance across MC passes)
+    epistemic = float(np.mean(np.var(mc_probs, axis=0)))
+
+    # Aleatoric Uncertainty (Dirichlet uncertainty mass)
+    alpha_np = alpha_last.detach().cpu().numpy()
+    S_total = np.sum(alpha_np)
+    K = alpha_np.shape[1]
+    aleatoric = float(K / S_total)
+
+    predicted_class = int(np.argmax(mean_probs))
+
+    label = "Sarcastic" if predicted_class == 1 else "Not Sarcastic"
+
+    prob_dict = {
+        "Not Sarcastic": float(mean_probs[0][0]),
+        "Sarcastic": float(mean_probs[0][1])
+    }
+
+    return label, prob_dict, aleatoric, epistemic
+
+
+# ============================
+# Gradio UI
+# ============================
+
+demo = gr.Interface(
+    fn=predict,
+    inputs=[
+        gr.Textbox(lines=4, placeholder="Enter Malayalam or Tamil text here..."),
+        gr.Slider(5, 50, value=20, step=5, label="MC Dropout Passes (T)")
+    ],
+    outputs=[
+        gr.Textbox(label="Predicted Label"),
+        gr.Label(label="Class Probabilities"),
+        gr.Number(label="Aleatoric Uncertainty (Dirichlet Mass)"),
+        gr.Number(label="Epistemic Uncertainty (MC Variance)")
+    ],
+    title="🧠 Uncertainty-Aware Transformer for Sarcasm Detection",
+    description="""
+    This model integrates Evidential Deep Learning and Monte Carlo Dropout
+    to estimate both aleatoric and epistemic uncertainty for sarcasm detection
+    in Malayalam and Tamil text.
+    """,
+)
+
+if __name__ == "__main__":
+    demo.launch()
