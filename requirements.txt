@@ -1,5 +1,5 @@
-streamlit
 torch
 transformers
-sentencepiece
+gradio
 numpy
+accelerate
