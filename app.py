@@ -1,12 +1,9 @@
-import streamlit as st
+import gradio as gr
 import torch
-import matplotlib.pyplot as plt
-
 from transformers import AutoTokenizer
 
 from model import EvidentialDeberta
 from utils import predictive_entropy
-
 
 MODEL_NAME = "microsoft/mdeberta-v3-base"
 
@@ -18,7 +15,6 @@ LABELS = {
     0: "Non-Sarcastic",
     1: "Sarcastic"
 }
-
 
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_NAME
@@ -35,24 +31,13 @@ model.load_state_dict(
 
 model.to(device)
 
-st.title("Uncertainty-Aware Text Classification")
-
-st.write(
-    "mDeBERTa + Evidential Learning + MC Dropout"
-)
-
-text = st.text_area(
-    "Enter text"
-)
-
 MC_RUNS = 20
 
 
-if st.button("Predict"):
+def predict(text):
 
     if text.strip() == "":
-        st.warning("Please enter text")
-        st.stop()
+        return "Please enter text"
 
     encoding = tokenizer(
         text,
@@ -99,51 +84,26 @@ if st.button("Predict"):
         dim=1
     )
 
-    st.subheader("Prediction")
+    result = f"""
+Prediction: {LABELS[pred.item()]}
 
-    st.success(
-        f"Predicted Class: {LABELS[pred.item()]}"
-    )
+Confidence: {confidence.item():.4f}
 
-    st.write(
-        f"Confidence: {confidence.item():.4f}"
-    )
+Entropy: {entropy.item():.4f}
+"""
 
-    st.write(
-        f"Predictive Entropy: {entropy.item():.4f}"
-    )
+    return result
 
-    fig, ax = plt.subplots()
 
-    ax.bar(
-        LABELS.values(),
-        mean_probs.squeeze().cpu().numpy()
-    )
+demo = gr.Interface(
+    fn=predict,
+    inputs=gr.Textbox(
+        lines=4,
+        placeholder="Enter Malayalam text here..."
+    ),
+    outputs="text",
+    title="Uncertainty-Aware Malayalam Sarcasm Detection",
+    description="mDeBERTa + Evidential Learning + MC Dropout"
+)
 
-    ax.set_ylabel("Probability")
-
-    ax.set_title("Class Probabilities")
-
-    st.pyplot(fig)
-
-    if entropy.item() < 0.3:
-
-        st.success(
-            "Very confident prediction"
-        )
-
-    elif entropy.item() < 0.6:
-
-        st.warning(
-            "Moderate uncertainty"
-        )
-
-    else:
-
-        st.error(
-            "High uncertainty detected"
-        )
-
-    st.info(
-        "MC Dropout performs multiple stochastic forward passes to estimate uncertainty."
-    )
+demo.launch()
