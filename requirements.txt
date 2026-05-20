@@ -1,5 +1,7 @@
 torch
 transformers
-gradio
+streamlit
+pandas
 numpy
-accelerate
+matplotlib
+scikit-learn
