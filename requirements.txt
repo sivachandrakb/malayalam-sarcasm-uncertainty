@@ -1,7 +1,9 @@
 torch
 transformers
-streamlit
+gradio
 pandas
 numpy
 matplotlib
 scikit-learn
+sentencepiece
+accelerate
